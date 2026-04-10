@@ -112,7 +112,30 @@ def processar_cnab240(linhas):
         # ================= REGISTRO B =================
         elif tipo == "B" and registro_atual:
             cpf = linha[21:33].strip()
+
+            # extrair dados do texto
+            dados = {}
+            partes = registro_atual["1A"].split("|")
+            for p in partes:
+                if ":" in p:
+                    chave, valor = p.split(":", 1)
+                    dados[chave.strip()] = valor.strip()
+
+            nome = dados.get("Nome", "")
+            prec_cp = dados.get("PREC/CP", "")
+            valor_str = dados.get("Valor", "").replace(",", "").replace(".", "").strip()
+
+            try:
+                valor_float = float(valor_str) / 100
+                valor_fmt = f"{valor_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            except:
+                valor_fmt = "0,00"
+
             registro_atual["2B"] = f"CPF: {cpf}"
+            registro_atual["cpf"] = cpf
+            registro_atual["nome"] = nome
+            registro_atual["prec_cp"] = prec_cp
+            registro_atual["valor"] = valor_fmt
 
             chave = (
                 registro_atual.get("banco"),
@@ -185,15 +208,11 @@ def gerar_relatorio(registros, caminho_saida):
 
     return total_valores
 
-# ============================================================
-#NOVA FUNÇÃO DO RELATÓRIO DE VALORES > 260.000,00
-# ============================================================
 
 def gerar_relatorio_valores_altos(linhas, caminho_saida):
     registros_altos = []
 
     for linha in linhas:
-
         if len(linha) < 140:
             continue
 
@@ -207,17 +226,14 @@ def gerar_relatorio_valores_altos(linhas, caminho_saida):
 
         valor_num = int(valor_str)
 
-        if valor_num > 26000000:  # 260.000,00
-
+        if valor_num > 26000000:
             nome = linha[43:73].strip()
             codom = linha[78:84].strip()
             prec_cp = linha[84:93].strip()
 
             valor_fmt = f"{valor_num/100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
             registros_altos.append((nome, codom, prec_cp, valor_fmt))
 
-    # 👉 só gera se tiver dados
     if not registros_altos:
         return
 
@@ -230,7 +246,7 @@ def gerar_relatorio_valores_altos(linhas, caminho_saida):
         for nome, codom, prec_cp, valor_fmt in registros_altos:
             f.write(f"{nome:<35} {codom:<10} {prec_cp:<12} {valor_fmt:<12}\n")
 
-        
+
 def gerar_relatorio_inconsistencias(pasta, nome_base, duplicados, registros, contagem_contas, mapa_cpfs):
 
     tem_duplicado = any(qtd > 1 for qtd in contagem_contas.values())
@@ -245,7 +261,6 @@ def gerar_relatorio_inconsistencias(pasta, nome_base, duplicados, registros, con
         f.write("RELATÓRIO DE INCONSISTÊNCIAS BANCÁRIAS\n")
         f.write("-" * 80 + "\n\n")
 
-        # DUPLICADOS COM CPF
         if tem_duplicado:
             f.write("DADOS BANCÁRIOS DUPLICADOS:\n")
 
@@ -259,7 +274,6 @@ def gerar_relatorio_inconsistencias(pasta, nome_base, duplicados, registros, con
 
                     f.write("\n")
 
-        # CAMPOS VAZIOS
         if tem_vazio:
             f.write("CAMPOS VAZIOS:\n")
             for i, reg in enumerate(registros, start=1):
@@ -273,9 +287,59 @@ def registrar_resumo(caminho_resumo, nome_relatorio, total):
         f.write(f"{nome_relatorio:<50} TOTAL: {total_fmt}\n")
 
 
+# ================= NOVO RELATÓRIO =================
+
+def gerar_relatorio_cpfs_repetidos(pasta, cpf_global):
+
+    caminho = os.path.join(pasta, "CPF_repetido_nos_arquivos.txt")
+
+    with open(caminho, "w", encoding="utf-8") as f:
+
+        f.write("RELATÓRIO DE CPFs REPETIDOS NOS ARQUIVOS\n")
+        f.write("=" * 120 + "\n\n")
+
+        encontrou = False
+
+        for cpf, ocorrencias in sorted(cpf_global.items()):
+
+            if len(ocorrencias) > 1:
+                encontrou = True
+
+                # 🔹 Cabeçalho por CPF
+                f.write(f"CPF: {cpf}\n")
+                f.write("-" * 120 + "\n")
+
+                # 🔹 Cabeçalho da tabela
+                f.write(
+                    f"{'Ocorrência':<12} | "
+                    f"{'Valor':>15} | "
+                    f"{'Nome':<30} | "
+                    f"{'Arquivo':<25} | "
+                    f"{'PREC/CP':<12}\n"
+                )
+
+                f.write("-" * 120 + "\n")
+
+                # 🔹 Linhas
+                for i, (arquivo, nome, prec_cp, valor) in enumerate(ocorrencias, start=1):
+
+                    f.write(
+                        f"{str(i):<12} | "
+                        f"{valor:>15} | "
+                        f"{nome:<30} | "
+                        f"{arquivo:<25} | "
+                        f"{prec_cp:<12}\n"
+                    )
+
+                f.write("\n\n")
+
+        if not encontrou:
+            f.write("Nenhum CPF repetido encontrado.\n")
+
+
 # ================= PROGRAMA PRINCIPAL =================
 
-pasta = r"C:\Python\Programas funcionando\Arquivos de bancos"
+pasta = r"E:\Python\Arquivos de bancos"
 
 if not os.path.exists(pasta):
     sys.exit()
@@ -290,6 +354,9 @@ caminho_resumo = os.path.join(pasta, "Resumo_dos_relatorios.txt")
 open(caminho_resumo, "w", encoding="utf-8").write(
     "RELATÓRIO RESUMO DOS TOTAIS\n----------------------------------------------\n"
 )
+
+# NOVO: DICIONÁRIO GLOBAL
+cpf_global = defaultdict(list)
 
 for arquivo in arquivos:
 
@@ -314,8 +381,20 @@ for arquivo in arquivos:
     total_relatorio = gerar_relatorio(registros, relatorio_cnab)
 
     registrar_resumo(caminho_resumo, f"{nome_base}_relatorio.txt", total_relatorio)
-    
-    # NOVO RELATÓRIO DE VALORES ALTOS
-    relatorio_altos = os.path.join(pasta, f"{nome_base}_valores_acima_de_260000.txt") 
-    
+
+    relatorio_altos = os.path.join(pasta, f"{nome_base}_valores_acima_de_260000.txt")
     gerar_relatorio_valores_altos(linhas, relatorio_altos)
+
+    # NOVO: alimenta CPF global
+    for reg in registros:
+        cpf = reg.get("cpf")
+        nome = reg.get("nome")
+        prec_cp = reg.get("prec_cp")
+        valor = reg.get("valor")
+
+        if cpf:
+            cpf_global[cpf].append((arquivo, nome, prec_cp, valor))
+
+
+# NOVO: gera relatório final
+gerar_relatorio_cpfs_repetidos(pasta, cpf_global)
