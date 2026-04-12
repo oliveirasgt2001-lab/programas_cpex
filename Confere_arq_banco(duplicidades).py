@@ -4,13 +4,29 @@ import re
 from collections import defaultdict
 
 
+# ================= FUNÇÕES AUXILIARES =================
+
+def formatar_valor(valor_str):
+    try:
+        valor = float(valor_str.replace(",", "").replace(".", "")) / 100
+        return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "0,00"
+
+
+def linha_separadora(larguras):
+    return "-" * (sum(larguras) + 3 * (len(larguras) - 1))
+
+
+# ================= FUNÇÕES =================
+
 def carregar_arquivo(caminho):
     if not os.path.exists(caminho):
         return []
     try:
         with open(caminho, "r", encoding="utf-8") as arq:
             return arq.readlines()
-    except UnicodeDecodeError:
+    except:
         with open(caminho, "r", encoding="latin-1", errors="ignore") as arq:
             return arq.readlines()
 
@@ -29,6 +45,7 @@ def encontrar_caracteres_especiais_com_pos(linha):
 
 
 def verificar_caracteres_especiais_em_todas_linhas(linhas, caminho_saida):
+
     linhas_com_problemas = []
 
     for i, linha in enumerate(linhas, start=1):
@@ -36,30 +53,28 @@ def verificar_caracteres_especiais_em_todas_linhas(linhas, caminho_saida):
         if especiais:
             linhas_com_problemas.append((i, especiais, linha.strip()))
 
+    # 🔴 NÃO GERA ARQUIVO
     if not linhas_com_problemas:
-        return False  # 🔥 retorno novo
+        return
 
     with open(caminho_saida, "w", encoding="utf-8") as f:
-        f.write("⚠️ Caracteres especiais encontrados nas seguintes linhas:\n\n")
-        f.write(f"{'Linha':<8} {'Caracteres encontrados':<45} {'Conteúdo da linha'}\n")
-        f.write("-" * 100 + "\n")
+
+        cab = ["Linha", "Caracteres", "Conteúdo"]
+        larg = [8, 50, 80]
+
+        f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+        f.write(linha_separadora(larg) + "\n")
 
         for num_linha, chars_pos, conteudo in linhas_com_problemas:
-            chars_descritos = ", ".join(f"{repr(c)}(pos {pos})" for pos, c in chars_pos)
-            f.write(f"{str(num_linha):<8} {chars_descritos:<45} {conteudo}\n")
+            chars_descritos = ", ".join(f"{c}(p{pos})" for pos, c in chars_pos)
 
-    return True  # 🔥 retorno novo
+            linha_dados = [
+                str(num_linha),
+                chars_descritos,
+                conteudo[:80]
+            ]
 
-
-def verificar_dados_bancarios_vazios(banco, agencia, conta):
-    problemas = []
-    if not banco:
-        problemas.append("Banco vazio")
-    if not agencia:
-        problemas.append("Agência vazia")
-    if not conta:
-        problemas.append("Conta vazia")
-    return problemas
+            f.write(" | ".join(d.ljust(w) for d, w in zip(linha_dados, larg)) + "\n")
 
 
 def processar_cnab240(linhas, nome_arquivo):
@@ -75,7 +90,7 @@ def processar_cnab240(linhas, nome_arquivo):
         "precs": set()
     })
 
-    for num, linha in enumerate(linhas, start=1):
+    for linha in linhas:
 
         if len(linha) < 140:
             continue
@@ -83,31 +98,20 @@ def processar_cnab240(linhas, nome_arquivo):
         tipo = linha[13]
 
         if tipo == "A":
-            banco = linha[0:3].strip()
-            agencia = linha[23:28].strip()
-            conta = linha[29:41].strip()
-
-            problemas = verificar_dados_bancarios_vazios(banco, agencia, conta)
-
-            chave = (banco, agencia, conta)
-            contagem_contas[chave] += 1
-
-            nome = linha[43:73].strip()
-            codom = linha[78:84].strip()
-            prec_cp = linha[84:93].strip()
-            data_pag = linha[93:101].strip()
-            valor = linha[126:134].strip()
-
             registro_atual = {
-                "banco": banco,
-                "agencia": agencia,
-                "conta": conta,
-                "prec_cp": prec_cp,
-                "nome": nome,
-                "valor_bruto": valor
+                "banco": linha[0:3].strip(),
+                "agencia": linha[23:28].strip(),
+                "conta": linha[29:41].strip(),
+                "prec_cp": linha[84:93].strip(),
+                "nome": linha[43:73].strip(),
+                "valor_bruto": linha[126:134].strip()
             }
 
+            chave = (registro_atual["banco"], registro_atual["agencia"], registro_atual["conta"])
+            contagem_contas[chave] += 1
+
         elif tipo == "B" and registro_atual:
+
             cpf = linha[21:33].strip()
 
             chave = (
@@ -120,16 +124,8 @@ def processar_cnab240(linhas, nome_arquivo):
             mapa_detalhado[chave]["arquivos"].add(nome_arquivo)
             mapa_detalhado[chave]["precs"].add(registro_atual["prec_cp"])
 
-            valor_str = registro_atual["valor_bruto"].replace(",", "").replace(".", "").strip()
-
-            try:
-                valor_float = float(valor_str) / 100
-                valor_fmt = f"{valor_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            except:
-                valor_fmt = "0,00"
-
             registro_atual["cpf"] = cpf
-            registro_atual["valor"] = valor_fmt
+            registro_atual["valor"] = formatar_valor(registro_atual["valor_bruto"])
 
             registros.append(registro_atual)
             registro_atual = None
@@ -138,76 +134,201 @@ def processar_cnab240(linhas, nome_arquivo):
 
 
 def gerar_relatorio(registros, caminho_saida):
-    if not registros:
-        return 0.0
 
-    total_valores = 0.0
+    cab = ["Nº", "Banco", "Agência", "Conta", "Nome", "PREC/CP", "Valor (R$)", "CPF"]
+    larg = [4, 6, 8, 14, 30, 10, 15, 14]
+
+    total = 0.0
 
     with open(caminho_saida, "w", encoding="utf-8") as f:
-        for reg in registros:
-            valor_str = reg.get("valor_bruto", "").replace(",", "").replace(".", "").strip()
+
+        f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        if not registros:
+            f.write("Nenhum registro encontrado.\n")
+            f.write(linha_separadora(larg) + "\n")
+            f.write(f"{'TOTAL GERAL:'.ljust(sum(larg)-20)} {'0,00'.rjust(20)}\n")
+            return 0.0
+
+        for i, r in enumerate(registros, 1):
+
+            valor = formatar_valor(r["valor_bruto"])
+
             try:
-                total_valores += float(valor_str) / 100
+                total += float(r["valor_bruto"]) / 100
             except:
                 pass
 
-    return total_valores
+            linha_dados = [
+                str(i),
+                r["banco"],
+                r["agencia"],
+                r["conta"],
+                r["nome"][:30],
+                r["prec_cp"],
+                valor,
+                r["cpf"]
+            ]
+
+            f.write(" | ".join(d.ljust(w) for d, w in zip(linha_dados, larg)) + "\n")
+
+        f.write(linha_separadora(larg) + "\n")
+
+        total_fmt = formatar_valor(str(int(total * 100)))
+        f.write(f"{'TOTAL GERAL:'.ljust(sum(larg)-20)} {total_fmt.rjust(20)}\n")
+
+    return total
 
 
-# ================= RESUMO MELHORADO =================
-def registrar_resumo_completo(caminho, nome_arquivo, total, registros, linhas, teve_caractere):
+def gerar_relatorio_valores_altos(linhas, caminho_saida):
 
-    with open(caminho, "a", encoding="utf-8") as f:
+    registros = []
 
-        total_fmt = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    for linha in linhas:
 
-        f.write("=" * 80 + "\n")
-        f.write(f"ARQUIVO: {nome_arquivo}\n")
-        f.write("=" * 80 + "\n")
+        if len(linha) < 140:
+            continue
 
-        # 🔹 Total financeiro
-        f.write(f"TOTAL (R$): {total_fmt}\n")
+        if linha[13] != "A":
+            continue
 
-        # 🔹 Total beneficiários
-        total_benef = len(registros)
-        f.write(f"TOTAL DE BENEFICIÁRIOS: {total_benef}\n\n")
+        valor = linha[126:134].strip()
 
-        # 🔹 Valores acima de 260 mil
-        f.write("BENEFICIÁRIOS COM VALORES ACIMA DE 260.000:\n")
-        encontrou_altos = False
+        if valor.isdigit() and int(valor) > 26000000:
 
-        for linha in linhas:
-            if len(linha) < 140:
+            nome = linha[43:73].strip()
+            codom = linha[78:84].strip()
+            prec = linha[84:93].strip()
+
+            valor_fmt = formatar_valor(valor)
+
+            registros.append((nome, codom, prec, valor_fmt))
+
+    # 🔴 SÓ GERA SE TIVER DADO
+    if not registros:
+        return
+
+    cab = ["Nome", "CODOM", "PREC/CP", "Valor"]
+    larg = [35, 10, 12, 15]
+
+    with open(caminho_saida, "w", encoding="utf-8") as f:
+
+        f.write("VALORES ACIMA DE 260.000\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        for nome, codom, prec, valor_fmt in registros:
+            f.write(f"{nome:<35} | {codom:<10} | {prec:<12} | {valor_fmt:>15}\n")
+
+
+def gerar_relatorio_inconsistencias(pasta, nome_base, registros, contagem_contas, mapa_detalhado):
+
+    linhas_saida = []
+
+    for (b, a, c), qtd in contagem_contas.items():
+        if qtd > 1:
+            info = mapa_detalhado[(b, a, c)]
+
+            if len(info["cpfs"]) <= 1:
                 continue
 
-            if linha[13] != "A":
+            linhas_saida.append(
+                (b, a, c, qtd, info["cpfs"], info["arquivos"], info["precs"])
+            )
+
+    # 🔴 SÓ GERA SE TIVER DADO
+    if not linhas_saida:
+        return
+
+    caminho = os.path.join(pasta, f"{nome_base}_inconsistencias.txt")
+
+    cab = ["Banco", "Agência", "Conta", "Qtde", "CPFs", "Arquivos", "PREC"]
+    larg = [6, 8, 15, 5, 25, 20, 10]
+
+    with open(caminho, "w", encoding="utf-8") as f:
+
+        f.write("DADOS BANCÁRIOS DUPLICADOS (CPFs DIFERENTES)\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        for b, a, c, qtd, cpfs, arquivos, precs in linhas_saida:
+            f.write(
+                f"{b:<6} | {a:<8} | {c:<15} | {qtd:<5} | "
+                f"{', '.join(cpfs)[:25]:<25} | "
+                f"{', '.join(arquivos)[:20]:<20} | "
+                f"{', '.join(precs)[:10]:<10}\n"
+            )
+
+def gerar_relatorio_cpfs_repetidos(pasta, cpf_global):
+
+    conteudo = []
+
+    for cpf, ocorrencias in sorted(cpf_global.items()):
+        if len(ocorrencias) > 1:
+            conteudo.append((cpf, ocorrencias))
+
+    # 🔴 NÃO GERA SE VAZIO
+    if not conteudo:
+        return
+
+    caminho = os.path.join(pasta, "CPF_repetido_nos_arquivos.txt")
+
+    cab = ["#", "Valor", "Nome", "Arquivo", "PREC"]
+    larg = [4, 15, 30, 25, 10]
+
+    with open(caminho, "w", encoding="utf-8") as f:
+
+        for cpf, ocorrencias in conteudo:
+
+            f.write("="*80 + "\n")
+            f.write(f"CPF: {cpf}\n")
+            f.write("="*80 + "\n")
+
+            f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+            f.write(linha_separadora(larg) + "\n")
+
+            for i, (arq, nome, prec, valor, *_ ) in enumerate(ocorrencias, 1):
+                f.write(
+                    f"{i:<4} | {valor:>15} | {nome[:30]:<30} | {arq[:25]:<25} | {prec:<10}\n"
+                )
+                            
+def escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global):
+
+    with open(caminho_resumo, "a", encoding="utf-8") as f:
+
+        f.write("\n" + "="*100 + "\n")
+        f.write("CPFs REPETIDOS (RESUMO)\n")
+        f.write("="*100 + "\n")
+
+        encontrou = False
+
+        for cpf, ocorrencias in sorted(cpf_global.items()):
+
+            if len(ocorrencias) <= 1:
                 continue
 
-            valor_str = linha[126:134].strip()
+            encontrou = True
 
-            if valor_str.isdigit() and int(valor_str) > 26000000:
-                nome = linha[43:73].strip()
-                codom = linha[78:84].strip()
-                valor_fmt = f"{int(valor_str)/100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                f.write(f"- {nome} | CODOM: {codom} | Valor: {valor_fmt}\n")
-                encontrou_altos = True
+            f.write(f"\nCPF: {cpf}\n")
 
-        if not encontrou_altos:
-            f.write("Nenhum encontrado.\n")
+            for (arq, nome, prec, valor, banco, agencia, conta) in ocorrencias:
 
-        f.write("\n")
+                f.write(
+                    f"  Arquivo: {arq:<25} | "
+                    f"Banco: {banco:<6} | Ag: {agencia:<8} | Conta: {conta:<12} | "
+                    f"Valor: {valor:>12} | PREC: {prec:<10} | "
+                    f"Nome: {nome[:25]}\n"
+                )
 
-        # 🔹 Caracteres especiais
-        f.write("CARACTERES ESPECIAIS:\n")
-        if teve_caractere:
-            f.write("Há registros com caracteres especiais. Ver relatório específico.\n")
-        else:
-            f.write("Nenhum caractere especial encontrado.\n")
-
-        f.write("\n\n")
-
-
-# ================= PROGRAMA PRINCIPAL =================
+        if not encontrou:
+            f.write("Nenhum CPF repetido encontrado.\n")            
+            
+# ================= MAIN =================
 
 pasta = r"E:\Python\Arquivos de bancos"
 
@@ -221,9 +342,9 @@ if not arquivos:
 
 caminho_resumo = os.path.join(pasta, "Resumo_dos_relatorios.txt")
 
-open(caminho_resumo, "w", encoding="utf-8").write(
-    "RELATÓRIO RESUMO CONSOLIDADO\n\n"
-)
+open(caminho_resumo, "w", encoding="utf-8").write("RESUMO GERAL\n" + "="*80 + "\n\n")
+
+cpf_global = defaultdict(list)
 
 for arquivo in arquivos:
 
@@ -235,18 +356,104 @@ for arquivo in arquivos:
 
     nome_base = os.path.splitext(arquivo)[0]
 
-    relatorio_caracteres = os.path.join(pasta, f"{nome_base}_caracteres_especiais.txt")
-    teve_caractere = verificar_caracteres_especiais_em_todas_linhas(linhas, relatorio_caracteres)
+    verificar_caracteres_especiais_em_todas_linhas(
+        linhas,
+        os.path.join(pasta, f"{nome_base}_caracteres.txt")
+    )
 
-    registros, _, _ = processar_cnab240(linhas, arquivo)
+    registros, contagem_contas, mapa = processar_cnab240(linhas, arquivo)
+
+    gerar_relatorio_inconsistencias(pasta, nome_base, registros, contagem_contas, mapa)
 
     total = gerar_relatorio(registros, os.path.join(pasta, f"{nome_base}_relatorio.txt"))
 
-    registrar_resumo_completo(
-        caminho_resumo,
-        arquivo,
-        total,
-        registros,
+    # ================= DADOS PARA RESUMO =================
+
+    total_seguro = total if total is not None else 0.0
+    total_beneficiarios = len(registros)
+
+    # 🔴 Valores altos
+    valores_altos = []
+    for r in registros:
+        try:
+            if int(r["valor_bruto"]) > 26000000:
+                valores_altos.append((r["cpf"], r["valor"], r["prec_cp"]))
+        except:
+            pass
+
+    # 🔴 Dados bancários duplicados (CPFs diferentes)
+    duplicidades = []
+    for chave, qtd in contagem_contas.items():
+        if qtd > 1:
+            info = mapa[chave]
+            if len(info["cpfs"]) > 1:
+                duplicidades.append((chave, list(info["cpfs"])))
+
+    # 🔴 CPFs repetidos no arquivo
+    cpf_local = defaultdict(int)
+    for r in registros:
+        cpf_local[r["cpf"]] += 1
+
+    cpfs_repetidos = [cpf for cpf, qtd in cpf_local.items() if qtd > 1]
+
+    # ================= ESCREVE RESUMO =================
+
+    with open(caminho_resumo, "a", encoding="utf-8") as f:
+
+        f.write("="*80 + "\n")
+        f.write(f"ARQUIVO: {arquivo}\n")
+        f.write("="*80 + "\n")
+
+        f.write(f"TOTAL FINANCEIRO: {formatar_valor(str(int(total_seguro*100)))}\n")
+        f.write(f"TOTAL BENEFICIÁRIOS: {total_beneficiarios}\n\n")
+
+        # 🔴 Valores altos
+        if valores_altos:
+            f.write(">>> PAGAMENTOS ACIMA DE 260 MIL:\n")
+            for cpf, valor, prec in valores_altos:
+                f.write(f"CPF: {cpf} | VALOR: {valor} | PREC: {prec}\n")
+            f.write("\n")
+
+        # 🔴 Duplicidades bancárias
+        if duplicidades:
+            f.write(">>> DADOS BANCÁRIOS DUPLICADOS (CPFs DIFERENTES):\n")
+            for (banco, ag, conta), cpfs in duplicidades:
+                f.write(f"{banco}-{ag}-{conta} | CPFs: {', '.join(cpfs)}\n")
+            f.write("\n")
+
+     
+        
+        # 🔴 CPFs repetidos (com dados completos)
+        if cpfs_repetidos:
+            f.write(">>> CPFs REPETIDOS NO ARQUIVO (DETALHADO):\n")
+
+            for cpf in cpfs_repetidos:
+                for r in registros:
+                    if r["cpf"] == cpf:
+                        f.write(
+                            f"CPF: {cpf} | "
+                            f"Banco: {r['banco']} | Ag: {r['agencia']} | Conta: {r['conta']} | "
+                            f"Valor: {r['valor']} | PREC: {r['prec_cp']} | "
+                            f"Nome: {r['nome'][:25]}\n"
+                        )
+
+            f.write("\n")
+
+    # mantém relatório separado (igual antes)
+    gerar_relatorio_valores_altos(
         linhas,
-        teve_caractere
+        os.path.join(pasta, f"{nome_base}_valores_altos.txt")
     )
+
+    for r in registros:
+        cpf_global[r["cpf"]].append((
+        arquivo,
+        r["nome"],
+        r["prec_cp"],
+        r["valor"],
+        r["banco"],
+        r["agencia"],
+        r["conta"]
+))
+escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global)
+gerar_relatorio_cpfs_repetidos(pasta, cpf_global)
