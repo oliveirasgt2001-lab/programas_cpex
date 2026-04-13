@@ -17,6 +17,11 @@ def formatar_valor(valor_str):
 def linha_separadora(larguras):
     return "-" * (sum(larguras) + 3 * (len(larguras) - 1))
 
+def formatar_data(data_str):
+        if len(data_str) == 8 and data_str.isdigit():
+            return f"{data_str[0:2]}/{data_str[2:4]}/{data_str[4:8]}"
+        return data_str
+
 
 # ================= FUNÇÕES =================
 
@@ -99,18 +104,33 @@ def processar_cnab240(linhas, nome_arquivo):
 
         if tipo == "A":
             registro_atual = {
-                "banco": linha[0:3].strip(),
-                "agencia": linha[23:28].strip(),
-                "conta": linha[29:41].strip(),
-                "prec_cp": linha[84:93].strip(),
-                "nome": linha[43:73].strip(),
-                "valor_bruto": linha[126:134].strip()
+            "banco": linha[0:3].strip(),
+            "agencia": linha[23:28].strip(),
+            "conta": linha[29:41].strip(),
+            "prec_cp": linha[84:93].strip(),
+            "data_pagamento": linha[93:101].strip(),
+            "nome": linha[43:73].strip(),
+            "valor_bruto": linha[126:134].strip()
             }
 
-            chave = (registro_atual["banco"], registro_atual["agencia"], registro_atual["conta"])
-            contagem_contas[chave] += 1
+            def campo_vazio_ou_zerado(valor):
+                return not valor or valor.strip("0") == ""
 
-        elif tipo == "B" and registro_atual:
+            if (
+                campo_vazio_ou_zerado(registro_atual["banco"]) or
+                campo_vazio_ou_zerado(registro_atual["agencia"]) or
+                campo_vazio_ou_zerado(registro_atual["conta"])
+    ):
+                registro_atual["dados_bancarios_vazios"] = True
+            else:
+                registro_atual["dados_bancarios_vazios"] = False
+
+    # 🔴 CONTAGEM SÓ SE NÃO FOR VAZIO
+            if not registro_atual["dados_bancarios_vazios"]:
+                chave = (registro_atual["banco"], registro_atual["agencia"], registro_atual["conta"])
+                contagem_contas[chave] += 1
+
+        elif tipo == "B" and registro_atual is not None:
 
             cpf = linha[21:33].strip()
 
@@ -135,8 +155,8 @@ def processar_cnab240(linhas, nome_arquivo):
 
 def gerar_relatorio(registros, caminho_saida):
 
-    cab = ["Nº", "Banco", "Agência", "Conta", "Nome", "PREC/CP", "Valor (R$)", "CPF"]
-    larg = [4, 6, 8, 14, 30, 10, 15, 14]
+    cab = ["Nº", "Banco", "Agência", "Conta", "Nome", "PREC/CP", "Data", "Valor (R$)", "CPF", "Dados Vazios"]
+    larg = [4, 6, 8, 14, 30, 10, 12, 14, 14, 14]
 
     total = 0.0
 
@@ -154,6 +174,9 @@ def gerar_relatorio(registros, caminho_saida):
         for i, r in enumerate(registros, 1):
 
             valor = formatar_valor(r["valor_bruto"])
+            data_fmt = formatar_data(r["data_pagamento"])
+            flag_vazio = "⚠️ SIM" if r.get("dados_bancarios_vazios") else "OK"
+            
 
             try:
                 total += float(r["valor_bruto"]) / 100
@@ -167,8 +190,10 @@ def gerar_relatorio(registros, caminho_saida):
                 r["conta"],
                 r["nome"][:30],
                 r["prec_cp"],
+                data_fmt,
                 valor,
-                r["cpf"]
+                r["cpf"],
+                flag_vazio
             ]
 
             f.write(" | ".join(d.ljust(w) for d, w in zip(linha_dados, larg)) + "\n")
@@ -204,7 +229,7 @@ def gerar_relatorio_valores_altos(linhas, caminho_saida):
             valor_fmt = formatar_valor(valor)
 
             registros.append((nome, codom, prec, valor_fmt))
-
+    
     # 🔴 SÓ GERA SE TIVER DADO
     if not registros:
         return
@@ -278,25 +303,33 @@ def gerar_relatorio_cpfs_repetidos(pasta, cpf_global):
 
     caminho = os.path.join(pasta, "CPF_repetido_nos_arquivos.txt")
 
-    cab = ["#", "Valor", "Nome", "Arquivo", "PREC"]
-    larg = [4, 15, 30, 25, 10]
-
     with open(caminho, "w", encoding="utf-8") as f:
 
+        # topo do relatório
+        f.write("="*100 + "\n\n")
+
+        # cabeçalho novo
+        cab = ["CPF", "Valor", "Nome", "Arquivo", "PREC"]
+        larg = [18, 15, 30, 25, 10]
+
+        f.write(" | ".join(h.center(w) for h, w in zip(cab, larg)) + "\n")
+        f.write(linha_separadora(larg) + "\n")
+
+        # dados
         for cpf, ocorrencias in conteudo:
-
-            f.write("="*80 + "\n")
-            f.write(f"CPF: {cpf}\n")
-            f.write("="*80 + "\n")
-
-            f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
-            f.write(linha_separadora(larg) + "\n")
-
-            for i, (arq, nome, prec, valor, *_ ) in enumerate(ocorrencias, 1):
+            for (arq, nome, prec, valor, *_ ) in ocorrencias:
                 f.write(
-                    f"{i:<4} | {valor:>15} | {nome[:30]:<30} | {arq[:25]:<25} | {prec:<10}\n"
+                    f"{cpf:<18} | "
+                    f"{valor:>15} | "
+                    f"{nome[:30]:<30} | "
+                    f"{arq[:25]:<25} | "
+                    f"{prec:<10}\n"
                 )
-                            
+
+        # rodapé
+        f.write("="*100 + "\n")
+
+                           
 def escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global):
 
     with open(caminho_resumo, "a", encoding="utf-8") as f:
@@ -330,7 +363,7 @@ def escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global):
             
 # ================= MAIN =================
 
-pasta = r"E:\Python\Arquivos de bancos"
+pasta = r"C:\Python\Programas funcionando\Arquivos de bancos"
 
 if not os.path.exists(pasta):
     sys.exit()
@@ -362,6 +395,10 @@ for arquivo in arquivos:
     )
 
     registros, contagem_contas, mapa = processar_cnab240(linhas, arquivo)
+
+# 🔴 COLETA DADOS VAZIOS (AQUI É O LUGAR CERTO)
+
+    dados_vazios = [r for r in registros if r.get("dados_bancarios_vazios")]
 
     gerar_relatorio_inconsistencias(pasta, nome_base, registros, contagem_contas, mapa)
 
@@ -416,7 +453,7 @@ for arquivo in arquivos:
 
         # 🔴 Duplicidades bancárias
         if duplicidades:
-            f.write(">>> DADOS BANCÁRIOS DUPLICADOS (CPFs DIFERENTES):\n")
+            f.write(">>> DADOS BANCÁRIOS DUPLICADOS (IGUAIS) (CPFs DIFERENTES):\n")
             for (banco, ag, conta), cpfs in duplicidades:
                 f.write(f"{banco}-{ag}-{conta} | CPFs: {', '.join(cpfs)}\n")
             f.write("\n")
@@ -426,34 +463,57 @@ for arquivo in arquivos:
         # 🔴 CPFs repetidos (com dados completos)
         if cpfs_repetidos:
             f.write(">>> CPFs REPETIDOS NO ARQUIVO (DETALHADO):\n")
-
+            cab = ["CPF", "Banco", "Agência", "Conta", "Valor", "PREC", "Nome"]
+            larg = [14, 6, 8, 14, 12, 10, 25]
+            f.write(" | ".join(h.ljust(w) for h, w in zip(cab, larg)) + "\n")
+            f.write("-" * (sum(larg) + 3 * (len(larg) - 1)) + "\n")
             for cpf in cpfs_repetidos:
                 for r in registros:
                     if r["cpf"] == cpf:
+                        
                         f.write(
-                            f"CPF: {cpf} | "
-                            f"Banco: {r['banco']} | Ag: {r['agencia']} | Conta: {r['conta']} | "
-                            f"Valor: {r['valor']} | PREC: {r['prec_cp']} | "
-                            f"Nome: {r['nome'][:25]}\n"
-                        )
-
-            f.write("\n")
+                        f"{cpf:<14} | "
+                        f"{r['banco']:<6} | "
+                        f"{r['agencia']:<8} | "
+                        f"{r['conta']:<14} | "
+                        f"{r['valor']:>12} | "
+                        f"{r['prec_cp']:<10} | "
+                        f"{r['nome'][:25]:<25}\n"
+)
 
     # mantém relatório separado (igual antes)
     gerar_relatorio_valores_altos(
         linhas,
         os.path.join(pasta, f"{nome_base}_valores_altos.txt")
     )
+    # 🔴 RELATÓRIO DE DADOS BANCÁRIOS VAZIOS
+    if dados_vazios:
+        caminho_vazios = os.path.join(pasta, f"{nome_base}_dados_bancarios_vazios.txt")
+        
+        with open(caminho_vazios, "w", encoding="utf-8") as f:
+            f.write("DADOS BANCÁRIOS VAZIOS\n")
+            f.write("="*80 + "\n")
 
+            for r in dados_vazios:
+                f.write(
+                    f"CPF: {r['cpf']:<14} | "
+                    f"Nome: {r['nome'][:30]:<30} | "
+                    f"Banco: {r['banco']:<6} | "
+                    f"Ag: {r['agencia']:<8} | "
+                    f"Conta: {r['conta']:<14} | "
+                    f"PREC: {r['prec_cp']}\n"
+                )
+    
     for r in registros:
-        cpf_global[r["cpf"]].append((
-        arquivo,
-        r["nome"],
-        r["prec_cp"],
-        r["valor"],
-        r["banco"],
-        r["agencia"],
-        r["conta"]
-))
+            cpf_global[r["cpf"]].append((
+                arquivo,
+                r["nome"],
+                r["prec_cp"],
+                r["valor"],
+                r["banco"],
+                r["agencia"],
+                r["conta"]
+        ))    
+        
 escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global)
 gerar_relatorio_cpfs_repetidos(pasta, cpf_global)
