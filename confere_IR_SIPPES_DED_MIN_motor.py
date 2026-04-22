@@ -176,7 +176,8 @@ def carregar_cadastro():
                 "dependentes": dependentes,
                 "rendimentos": [],
                 "deducoes": [],
-                "ir_sistema": 0.0
+                "ir_sistema": 0.0,
+                "auditoria": []
             }
 
     return pessoas
@@ -185,6 +186,8 @@ def carregar_cadastro():
 # FINANCEIRO - POSICIONAL
 # =========================================================
 def carregar_financeiro(pessoas):
+    if not TABPAG:
+            carregar_tabpag
     with open(ARQ_FINANCEIRO, encoding="utf-8-sig") as f:
         next(f)
         for linha in f:
@@ -197,17 +200,42 @@ def carregar_financeiro(pessoas):
             rubrica = linha[33:39].strip().upper()
             if len(rubrica) < 2 :
                 continue
+
             try:
                 valor = float(linha[42:52].replace(".", "").replace(",", "."))
             except:
                 valor = 0.0
 
+            # 🔍 AUDITORIA - LEITURA (caixa preta)
+            regra = TABPAG.get(rubrica)
+            pessoa["auditoria"].append({
+                "fase": "LEITURA",
+                "rubrica": rubrica,
+                "valor": valor,
+                "tem_tabpag": "SIM" if regra else "NAO"
+            })
+
             # IR do sistema (ND0010 + ND0015)
             if rubrica in ["ND0010", "ND0015"]:
                 pessoa["ir_sistema"] += valor
+
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "FILTRO",
+                    "rubrica": rubrica,
+                    "motivo": "IR_SISTEMA"
+                })
+
                 continue
 
             if rubrica in RUBRICAS_IGNORAR:
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "FILTRO",
+                    "rubrica": rubrica,
+                    "motivo": "IGNORADA_LISTA"
+                })
+
                 continue
 
             tipo_duplo = rubrica[:2]
@@ -215,12 +243,43 @@ def carregar_financeiro(pessoas):
 
             if tipo_duplo == "DR":
                 pessoa["deducoes"].append((rubrica, valor))
+
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "CLASSIFICACAO",
+                    "rubrica": rubrica,
+                    "destino": "DEDUCAO_DR"
+                })
+
             elif tipo_duplo == "DD":
                 pessoa["rendimentos"].append((rubrica, valor))
+
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "CLASSIFICACAO",
+                    "rubrica": rubrica,
+                    "destino": "RENDIMENTO_DD"
+                })
+
             elif natureza == "R":
                 pessoa["rendimentos"].append((rubrica, valor))
+
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "CLASSIFICACAO",
+                    "rubrica": rubrica,
+                    "destino": "RENDIMENTO_NATUREZA_R"
+                })
+
             elif natureza == "D":
                 pessoa["deducoes"].append((rubrica, valor))
+
+                # 🔍 AUDITORIA
+                pessoa["auditoria"].append({
+                    "fase": "CLASSIFICACAO",
+                    "rubrica": rubrica,
+                    "destino": "DEDUCAO_NATUREZA_D"
+                })
 
 # =========================================================
 # PROCESSAMENTO / RELATÓRIO
@@ -253,14 +312,40 @@ def processar():
 
             for rub, val in p["rendimentos"]:
                 regra = tabpag.get(rub)
+
                 if regra and regra["flag"] == "1":
                     soma_rend += val
                     rend_validos.append((rub, val))
+
+                    p["auditoria"].append({
+                        "fase": "PROCESSAMENTO_REND",
+                        "rubrica": rub,
+                        "status": "ENTROU"
+                    })
+                else:
+                    p["auditoria"].append({
+                        "fase": "PROCESSAMENTO_REND",
+                        "rubrica": rub,
+                        "status": f"FORA_FLAG_{regra['flag'] if regra else 'SEM_TABPAG'}"
+                    })
             
             for rub, val in p["deducoes"]:
                 regra = TABPAG.get(rub)
+
                 if regra and regra["flag"] in ["2", "4"]:
                     ded_validas.append((rub, val))
+
+                    p["auditoria"].append({
+                        "fase": "PROCESSAMENTO_DED",
+                        "rubrica": rub,
+                        "status": "ENTROU"
+                    })
+                else:
+                    p["auditoria"].append({
+                        "fase": "PROCESSAMENTO_DED",
+                        "rubrica": rub,
+                        "status": f"FORA_FLAG_{regra['flag'] if regra else 'SEM_TABPAG'}"
+                    })
 
             ded_dep = deducao_dependentes(p["dependentes"])
             ded_idade = deducao_idade(idade)
@@ -416,7 +501,17 @@ def gerar_relatorio_completo_pessoa(out, p):
     out.write(f"IR Sistema (ND0010+ND0015): R$ {formatar(p['ir_sistema'])}\n")
     out.write(f"DIFERENÇA: R$ {formatar(ir_final - p['ir_sistema'])}\n")
     out.write("-" * 70 + "\n\n")
+    out.write("\nAUDITORIA:\n")
+    out.write("-" * 40 + "\n")
 
+    for item in p.get("auditoria", []):
+        out.write(
+            f"{item.get('fase','-')} | "
+            f"{item.get('rubrica','-')} | "
+            f"{item.get('status','-')} | "
+            f"{item.get('motivo','-')} | "
+            f"{item.get('tem_tabpag','-')}\n"
+        )
 # =========================================================
 # DEBUGS NOVOS (ADICIONADOS)
 # =========================================================
@@ -453,6 +548,8 @@ def gerar_debug_todos_txt(pessoas):
             gerar_relatorio_completo_pessoa(out, p)
 
     print("Arquivo de DEBUG geral gerado em:", caminho_saida)
+    
+    
 
 # =========================================================
 # EXECUÇÃO
