@@ -333,18 +333,26 @@ def gerar_relatorio_todos_cpfs(pasta, cpf_global):
 
     caminho = os.path.join(pasta, "Lista_Todos_CPFs.txt")
 
-    todos_cpfs = sorted(cpf_global.keys())
+    lista = []
 
-    if not todos_cpfs:
+    # monta lista com CPF + PREC
+    for cpf, ocorrencias in cpf_global.items():
+        for (arquivo, nome, prec, valor, banco, agencia, conta) in ocorrencias:
+            lista.append((cpf, prec))
+
+    if not lista:
         return
+
+    # remove duplicados e ordena
+    lista_unica = sorted(set(lista))
 
     with open(caminho, "w", encoding="utf-8") as f:
 
-        f.write("LISTA DE TODOS OS CPFs\n")
-        f.write("="*40 + "\n\n")
+        f.write("LISTA DE TODOS OS CPFs + PREC/CP\n")
+        f.write("="*50 + "\n\n")
 
-        for i, cpf in enumerate(todos_cpfs, start=1):
-            f.write(f"{i:06d} - {cpf}\n")
+        for i, (cpf, prec) in enumerate(lista_unica, start=1):
+            f.write(f"{i:06d} - {cpf} - {prec}\n")
                            
 def escrever_cpfs_repetidos_no_resumo(caminho_resumo, cpf_global):
 

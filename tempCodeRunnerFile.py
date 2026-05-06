@@ -1,1 +1,1 @@
-for r in registros:
+Todos
